@@ -2,7 +2,56 @@
 
 A [CRS](https://github.com/oss-crs) (Cyber Reasoning System) that uses the Prism multi-team LangGraph agent to autonomously find and patch vulnerabilities in open-source projects.
 
-Given proof-of-vulnerability (POV) inputs that crash a target binary, Prism iterates through evaluation, analysis, and patch teams to understand the failure, produce a fix strategy, generate patches, and verify them.
+Given proof-of-vulnerability (POV) inputs that crash a target binary, Prism iterates through evaluation, analysis, and patch teams to understand the failure, produce a fix strategy, generate candidate patches, and submit a verified patch.
+
+## How it works
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│ patcher.py (orchestrator)                                           │
+│                                                                     │
+│  1. Fetch POVs, optional ref diff, and source                       │
+│     crs.fetch(POV / DIFF)                                           │
+│     crs.download(src)                                               │
+│         │                                                           │
+│         ▼                                                           │
+│  2. Reproduce crashes on base build                                 │
+│     libCRS run-pov (build-id: base)                                 │
+│     → crash_log_*.txt                                               │
+│         │                                                           │
+│         ▼                                                           │
+│  3. Launch Prism with POV blobs + crash context                     │
+└─────────┬───────────────────────────────────────────────────────────┘
+          │
+          ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│ Prism agent (multi-team workflow)                                   │
+│                                                                     │
+│  ┌──────────────┐   ┌──────────────┐   ┌─────────────────────────┐  │
+│  │  Evaluation  │──▶│   Analysis   │──▶│      Patch Team         │  │
+│  │              │   │              │   │                         │  │
+│  │ Reproduce    │   │ Crash + code │   │ Generate / review diff  │  │
+│  │ build / test │   │ context      │   │ via libCRS validation   │  │
+│  └──────────────┘   └──────────────┘   └──────────┬──────────────┘  │
+│                                                   │                 │
+│                                      best diff ◀──┘                 │
+│                                                   │                 │
+│                              Write .diff to /patches/               │
+└─────────────────────────────────────────────────────────────────────┘
+          │
+          ▼
+┌─────────────────────────┐
+│ Submission daemon        │
+│ watches /patches/ ──────▶ oss-crs framework (auto-submit)
+└─────────────────────────┘
+```
+
+1. **`run_patcher`** fetches POVs, the target source tree, and an optional reference diff for delta mode, then reproduces crashes on the unpatched build via the builder sidecar.
+2. All POVs are treated as variants of the same vulnerability and passed to **Prism** in one session.
+3. Prism builds a detection context from POV blobs, runs its evaluation, analysis, and patch teams, and validates candidate diffs through **libCRS** (`apply-patch-build`, `run-pov`, `run-test`) using the builder sidecar.
+4. The best verified `.diff` is written to `/patches/`, where a daemon auto-submits it to the oss-crs framework.
+
+The orchestration layer supports `c`, `c++`, and `jvm` targets declared in `oss-crs/crs.yaml`.
 
 ## Project structure
 
@@ -12,18 +61,19 @@ pyproject.toml         # Package config (run_patcher entry point)
 bin/
   compile_target       # Builder phase: compiles the target project
 agents/
+  prism.py             # Prism agent (default)
   template.py          # Agent template
-crete/                 # Crete framework packages (ported from atlantis-crete)
-  atoms/               # Action, Detection models
-  prism/               # Prism agent, states, teams
-  environment/         # OssFuzzEnvironment / libCRS environment
-  evaluator/           # DefaultEvaluator
-  analyzer/            # Crash analysis, JVM analyzers
+crete/
+  analyzer/            # Crash analysis helpers, JVM analyzers
+  atoms/               # Detection and action models
   commons/             # Shared utilities
+  environment/         # libCRS-backed execution environment
+  evaluator/           # Patch evaluation logic
+  prism/               # Prism agent, states, and teams
 oss-crs/
   crs.yaml             # CRS metadata (supported languages, models, etc.)
   example-compose.yaml # Example crs-compose configuration
-  base.Dockerfile      # Base image: Ubuntu + Python + ripgrep + LangChain
+  base.Dockerfile      # Base image: Ubuntu + Python + LangGraph deps
   builder.Dockerfile   # Build phase image
   patcher.Dockerfile   # Run phase image
   docker-bake.hcl      # Docker Bake config for the base image
@@ -60,7 +110,7 @@ llm_config:
 
 ### 2. Configure LiteLLM
 
-Copy `oss-crs/sample-litellm-config.yaml` and set your API credentials. The LiteLLM proxy routes agent API calls to the configured provider. All models in `required_llms` must be configured.
+Copy `oss-crs/sample-litellm-config.yaml` and set your API credentials. The LiteLLM proxy routes Prism's model calls to the configured providers. If you keep the defaults, configure both `o4-mini` and `claude-sonnet-4-20250514`.
 
 ### 3. Run with oss-crs
 
@@ -74,6 +124,34 @@ crs-compose up -f crs-compose.yaml
 |---|---|---|
 | `CRS_AGENT` | `prism` | Agent module name (maps to `agents/<name>.py`) |
 | `PRISM_MODEL` | `o4-mini` | Primary model used by Prism |
-| `PRISM_BACKUP_MODEL` | `claude-sonnet-4-20250514` | Backup model used when the primary Prism pass fails |
-| `AGENT_TIMEOUT` | `0` (no limit) | Agent timeout in seconds (0 = run until budget exhausted) |
-| `BUILDER_MODULE` | `inc-builder-asan` | Builder sidecar module name (must match a `run_snapshot` entry in crs.yaml) |
+| `PRISM_BACKUP_MODEL` | `claude-sonnet-4-20250514` | Backup model used by Prism |
+| `BUILDER_MODULE` | `inc-builder-asan` | Builder sidecar module name (must match a `run_snapshot` entry in `crs.yaml`) |
+| `SUBMISSION_FLUSH_WAIT_SECS` | `12` | Delay before exit so the patch submission watcher can flush |
+
+Available models in the sample LiteLLM config:
+- `o4-mini`
+- `claude-sonnet-4-20250514`
+
+## Runtime behavior
+
+- **Execution**: the patcher runs non-interactively inside the CRS container
+- **POV handling**: all fetched POV files are batched into a single detection and treated as variants of the same bug
+- **Delta mode**: if `/work/diffs/ref.diff` exists, Prism includes it as reference context
+- **Build / test backend**: all validation runs through the builder sidecar via libCRS
+
+Debug artifacts:
+- Shared work directory: `/work`
+- Per-run agent outputs: `/work/agent/`
+- Fetched POVs: `/work/povs/`
+- Fetched delta diff: `/work/diffs/ref.diff`
+
+## Patch validity
+
+A patch is submitted only when it meets all criteria:
+
+1. **Builds** — compiles successfully through `apply-patch-build`
+2. **POVs don't crash** — all POV variants pass
+3. **Tests pass** — project test suite passes when available
+4. **Semantically correct** — the selected diff is the best validated candidate produced by Prism's workflow
+
+Submission is final once a `.diff` is written to `/patches/` and picked up by the watcher. Submitted patches cannot be edited or resubmitted, so Prism must finish validation before writing the patch file.
