@@ -1,8 +1,8 @@
 # crs-prism
 
-A [CRS](https://github.com/oss-crs) (Cyber Reasoning System) that uses the Prism multi-team LangGraph agent to autonomously find and patch vulnerabilities in open-source projects.
+A [CRS](https://github.com/oss-crs) (Cyber Reasoning System) that uses the Prism workflow to autonomously find and patch vulnerabilities in open-source projects.
 
-Given proof-of-vulnerability (POV) inputs that crash a target binary, Prism iterates through evaluation, analysis, and patch teams to understand the failure, produce a fix strategy, generate candidate patches, and submit a verified patch.
+Prism uses a cyclic workflow that rotates between analysis, patching, and evaluation agents. Each iteration refines the system's understanding of the bug and the patch's correctness, allowing it to gradually converge on a validated solution even when context size or bug complexity is challenging.
 
 ## How it works
 
