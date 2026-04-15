@@ -46,7 +46,7 @@ class PrismAgent:
         final_diff = None
         try:
             patch_state = self.compiled_graph.invoke(
-                InterTeamState(repo_path=str(context["pool"].source_directory)),
+                InterTeamState(repo_path=str(context["pool"].patch_directory)),
                 {"recursion_limit": self.recursion_limit},
             )
 
@@ -107,7 +107,7 @@ class PrismAgent:
             self.patch_team.set_llm(self._backup_llm)
 
             patch_state = self.compiled_graph.invoke(
-                InterTeamState(repo_path=str(context["pool"].source_directory)),
+                InterTeamState(repo_path=str(context["pool"].patch_directory)),
                 {"recursion_limit": self.recursion_limit},
             )
             final_diff = patch_state["diff"]

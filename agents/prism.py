@@ -69,7 +69,6 @@ def run(
     *,
     language: str = "c",
     sanitizer: str = "address",
-    builder: str,
     ref_diff: str | None = None,
 ) -> bool:
     """Run Prism and write the best diff to ``patches_dir``."""
@@ -79,7 +78,6 @@ def run(
     crs = init_crs_utils()
     pool = EnvironmentPool(
         crs=crs,
-        builder=builder,
         source_directory=source_dir,
     )
 

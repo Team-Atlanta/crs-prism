@@ -491,7 +491,7 @@ class DockerEvaluator:
                     environment.run_pov(
                         pov_path=Path(pov_file.name),
                         harness_name=blob.harness_name,
-                        build_id="base",
+                        rebuild_id=None,
                         response_dir=response_dir,
                     )
         except ChallengePoVFoundError as exc:
@@ -515,16 +515,13 @@ class DockerEvaluator:
         if not self.context["pool"].internal_test_exists():
             return "Tests skipped. No tests found.", current_patch_status
 
-        from crete.environment.libcrs_environment import LibCRSEnvironment
-
         environment = self.context["pool"].restore()
         response_dir = Path(tempfile.mkdtemp(prefix="crs-test-"))
         environment.patch(bytes(diff, "utf-8"), response_dir)
-        build_id = LibCRSEnvironment.read_build_id(response_dir)
 
         try:
             stdout, _ = environment.run_tests(
-                build_id=build_id,
+                patch_data=bytes(diff, "utf-8"),
                 response_dir=response_dir,
             )
             tests_log = stdout

@@ -105,11 +105,11 @@ class Evaluator(BaseAgent):
             blob = self.detection.blobs[0]
             response_dir = self.context["output_directory"] / "prism-initial-eval"
             response_dir.mkdir(parents=True, exist_ok=True)
-            build_id = "base"
+            rebuild_id = None
             environment.run_pov(
                 pov_path=_write_blob_to_temp_file(blob.blob),
                 harness_name=blob.harness_name,
-                build_id=build_id,
+                rebuild_id=rebuild_id,
                 response_dir=response_dir,
             )
         except ChallengePoVFoundError as e:
@@ -555,8 +555,7 @@ class Evaluator(BaseAgent):
             response_dir = self.context["output_directory"] / "prism-test-eval"
             response_dir.mkdir(parents=True, exist_ok=True)
             environment.patch(diff.encode("utf-8", errors="replace"), response_dir)
-            build_id = environment.read_build_id(response_dir)
-            stdout, _ = environment.run_tests(build_id, response_dir)
+            stdout, _ = environment.run_tests(diff.encode("utf-8", errors="replace"), response_dir)
             tests_log = stdout
         except ChallengeTestFailedError as e:
             tests_log = (e.stdout + e.stderr).decode(errors="replace")
